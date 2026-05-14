@@ -26,7 +26,7 @@ step()    { echo -e "\n${BOLD}==> $*${RESET}"; }
 # --------------------------------------------------------------------------- #
 [[ "$EUID" -ne 0 ]] && error "请以 root 用户运行此脚本（或使用 sudo）。"
 
-for cmd in curl wget systemctl useradd; do
+for cmd in curl systemctl useradd; do
   command -v "$cmd" &>/dev/null || error "缺少依赖命令: $cmd，请先安装。"
 done
 
@@ -139,10 +139,8 @@ step "下载 Gitea Runner v${RUNNER_VERSION} (${ARCH})"
 
 # v1.0.0+ 使用新名称 gitea-runner；v0.x 使用 act_runner
 if [[ "$(printf '%s\n' "1.0.0" "${RUNNER_VERSION}" | sort -V | head -1)" == "1.0.0" ]]; then
-  BINARY_NAME="gitea-runner"
   DL_URL="https://gitea.com/gitea/runner/releases/download/v${RUNNER_VERSION}/gitea-runner-${RUNNER_VERSION}-linux-${ARCH}"
 else
-  BINARY_NAME="gitea-runner"   # 本地统一命名
   DL_URL="https://dl.gitea.com/act_runner/v${RUNNER_VERSION}/act_runner-${RUNNER_VERSION}-linux-${ARCH}"
 fi
 
@@ -244,21 +242,32 @@ if [[ -f "$RUNNER_FILE" ]]; then
 else
   info "正在向 ${GITEA_URL} 注册 Runner..."
 
-  sudo -u gitea-runner /usr/local/bin/gitea-runner register \
-    --no-interactive \
-    --instance  "${GITEA_URL}" \
-    --token     "${RUNNER_TOKEN}" \
-    --name      "${RUNNER_NAME}" \
-    --labels    "${RUNNER_LABELS}" \
-    --config    "${CONFIG_FILE}" \
-    2>&1 | tee /tmp/gitea-runner-register.log
+  # 关键：必须先 cd 到 gitea-runner 有写权限的工作目录，
+  # register 命令会把 .runner 保存到「当前目录」，而非二进制所在目录。
+  # sudo -u 只切换用户身份，不切换 CWD，因此要在 bash -c 内先 cd。
+  # 变量通过环境变量传入，避免 URL/Token 含特殊字符时破坏 bash -c 字符串。
+  GITEA_URL="$GITEA_URL" \
+  RUNNER_TOKEN="$RUNNER_TOKEN" \
+  RUNNER_NAME="$RUNNER_NAME" \
+  RUNNER_LABELS="$RUNNER_LABELS" \
+  CONFIG_FILE="$CONFIG_FILE" \
+  sudo -u gitea-runner bash -c '
+    cd /var/lib/gitea-runner &&
+    /usr/local/bin/gitea-runner register \
+      --no-interactive \
+      --instance  "$GITEA_URL" \
+      --token     "$RUNNER_TOKEN" \
+      --name      "$RUNNER_NAME" \
+      --labels    "$RUNNER_LABELS" \
+      --config    "$CONFIG_FILE"
+  ' 2>&1 | tee /tmp/gitea-runner-register.log
 
   if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
     error "注册失败，请检查 Token 和 Gitea URL 是否正确。\n日志: /tmp/gitea-runner-register.log"
   fi
 
-  # 修正注册文件权限
-  [[ -f "$RUNNER_FILE" ]] && chown gitea-runner:gitea-runner "$RUNNER_FILE"
+  # .runner 由 gitea-runner 用户写入，权限已正确，确认即可
+  [[ -f "$RUNNER_FILE" ]] || error "注册看似成功但 .runner 文件未生成，请查看日志: /tmp/gitea-runner-register.log"
 
   success "Runner 注册成功。"
 fi
@@ -326,11 +335,6 @@ SystemMaxUse=200M
 SystemKeepFree=100M
 MaxRetentionSec=30day
 EOF
-
-# 同时配置一个软链日志目录方便查找
-LOG_DIR="/var/log/gitea-runner"
-mkdir -p "$LOG_DIR"
-chown gitea-runner:gitea-runner "$LOG_DIR"
 success "日志持久化配置完成（保留 30 天，最大 200MB）。"
 
 # --------------------------------------------------------------------------- #
@@ -355,7 +359,7 @@ fi
 # --------------------------------------------------------------------------- #
 echo -e "\n${BOLD}${GREEN}"
 echo "  ╔═══════════════════════════════════════════════════════╗"
-echo "  ║          🎉  Gitea Runner 安装完成！                  ║"
+echo "  ║          Gitea Runner 安装完成！                      ║"
 echo "  ╚═══════════════════════════════════════════════════════╝"
 echo -e "${RESET}"
 
