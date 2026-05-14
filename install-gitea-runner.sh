@@ -118,7 +118,7 @@ setup_docker() {
 clear
 echo -e "${BOLD}${CYAN}"
 echo "  ╔═══════════════════════════════════════════════════════╗"
-echo "  ║         Gitea Runner 一键安装脚本  v1.2.0             ║"
+echo "  ║         Gitea Runner 一键安装脚本  v1.3.0             ║"
 echo "  ║  https://github.com/phil616/install-gitea-runner      ║"
 echo "  ╚═══════════════════════════════════════════════════════╝"
 echo -e "${RESET}"
