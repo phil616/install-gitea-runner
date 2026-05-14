@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Gitea Runner 一键安装脚本
+# 版本: v1.1.0
+# 变更: 修复注册时 .runner 权限问题 / 修复 sudo env_reset 导致变量丢失问题
 # 支持: gitea-runner (v1.0.0+) / act_runner (v0.x 历史兼容)
-# 适用系统: Debian / Ubuntu / RHEL / CentOS / Rocky / AlmaLinux
-# 执行用户: root
-# 项目地址: https://gitea.com/gitea/runner
+# 适用: Debian / Ubuntu / RHEL / CentOS / Rocky / AlmaLinux
+# 用户: root
+# 仓库: https://github.com/phil616/install-gitea-runner
+# 上游: https://gitea.com/gitea/runner
 # =============================================================================
 
 set -euo pipefail
@@ -18,7 +21,7 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 info()    { echo -e "${CYAN}[INFO]${RESET}  $*"; }
 success() { echo -e "${GREEN}[OK]${RESET}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
-error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; exit 1; }
+error()   { echo -e "${RED}[错误]${RESET} $*" >&2; exit 1; }
 step()    { echo -e "\n${BOLD}==> $*${RESET}"; }
 
 # --------------------------------------------------------------------------- #
@@ -27,7 +30,7 @@ step()    { echo -e "\n${BOLD}==> $*${RESET}"; }
 [[ "$EUID" -ne 0 ]] && error "请以 root 用户运行此脚本（或使用 sudo）。"
 
 for cmd in curl systemctl useradd; do
-  command -v "$cmd" &>/dev/null || error "缺少依赖命令: $cmd，请先安装。"
+  command -v "$cmd" &>/dev/null || error "缺少依赖命令: $cmd，请先安装后重试。"
 done
 
 # --------------------------------------------------------------------------- #
@@ -37,12 +40,12 @@ detect_arch() {
   local machine
   machine="$(uname -m)"
   case "$machine" in
-    x86_64)              echo "amd64" ;;
-    aarch64|arm64)       echo "arm64" ;;
-    armv7l)              echo "arm-7" ;;
-    s390x)               echo "s390x" ;;
-    riscv64)             echo "riscv64" ;;
-    *)                   error "不支持的架构: $machine" ;;
+    x86_64)          echo "amd64"   ;;
+    aarch64|arm64)   echo "arm64"   ;;
+    armv7l)          echo "arm-7"   ;;
+    s390x)           echo "s390x"   ;;
+    riscv64)         echo "riscv64" ;;
+    *)               error "不支持的系统架构: $machine" ;;
   esac
 }
 
@@ -52,15 +55,15 @@ ARCH="$(detect_arch)"
 # 获取最新版本号
 # --------------------------------------------------------------------------- #
 get_latest_version() {
-  # 优先查询 Gitea API（新仓库 gitea/runner）
   local ver
   ver=$(curl -sf "https://gitea.com/api/v1/repos/gitea/runner/releases?limit=1" \
-        | grep -o '"tag_name":"[^"]*"' | head -1 | sed 's/.*:"//;s/"//') 2>/dev/null || true
+        | grep -o '"tag_name":"[^"]*"' | head -1 \
+        | sed 's/.*:"//;s/"//') 2>/dev/null || true
 
   if [[ -z "$ver" ]]; then
-    # 回退：查询旧仓库 act_runner
     ver=$(curl -sf "https://gitea.com/api/v1/repos/gitea/act_runner/releases?limit=1" \
-          | grep -o '"tag_name":"[^"]*"' | head -1 | sed 's/.*:"//;s/"//') 2>/dev/null || true
+          | grep -o '"tag_name":"[^"]*"' | head -1 \
+          | sed 's/.*:"//;s/"//') 2>/dev/null || true
   fi
 
   echo "${ver:-v1.0.0}"
@@ -71,28 +74,26 @@ get_latest_version() {
 # --------------------------------------------------------------------------- #
 clear
 echo -e "${BOLD}${CYAN}"
-echo "  ╔═══════════════════════════════════════════════════╗"
-echo "  ║       Gitea Runner 一键安装脚本                   ║"
-echo "  ║  https://gitea.com/gitea/runner                   ║"
-echo "  ╚═══════════════════════════════════════════════════╝"
+echo "  ╔═══════════════════════════════════════════════════════╗"
+echo "  ║         Gitea Runner 一键安装脚本  v1.1.0             ║"
+echo "  ║  https://github.com/phil616/install-gitea-runner      ║"
+echo "  ╚═══════════════════════════════════════════════════════╝"
 echo -e "${RESET}"
 
 # --------------------------------------------------------------------------- #
 # 交互式输入
 # --------------------------------------------------------------------------- #
 step "配置信息收集"
-
-echo -e "请依次输入以下信息（括号内为默认值，直接回车使用默认）：\n"
+echo -e "请依次输入以下信息（直接回车使用方括号内的默认值）：\n"
 
 # 1. Gitea 实例 URL
 read -rp "$(echo -e "${BOLD}[1/5]${RESET} Gitea 实例 URL（例: https://gitea.example.com）: ")" GITEA_URL
 [[ -z "$GITEA_URL" ]] && error "Gitea 实例 URL 不能为空。"
-GITEA_URL="${GITEA_URL%/}"   # 去掉末尾斜杠
+GITEA_URL="${GITEA_URL%/}"
 
-# 2. Runner 注册 Token
-echo -e "      ${YELLOW}提示: 在 Gitea → 管理面板 → Actions → Runners 页面获取 Token${RESET}"
-read -rsp "$(echo -e "${BOLD}[2/5]${RESET} Runner 注册 Token: ")" RUNNER_TOKEN
-echo ""
+# 2. Runner 注册 Token（明文显示）
+echo -e "      ${YELLOW}提示: 在 Gitea 管理面板 -> Actions -> Runners 页面获取 Token${RESET}"
+read -rp "$(echo -e "${BOLD}[2/5]${RESET} Runner 注册 Token: ")" RUNNER_TOKEN
 [[ -z "$RUNNER_TOKEN" ]] && error "Runner Token 不能为空。"
 
 # 3. Runner 名称
@@ -109,13 +110,14 @@ RUNNER_LABELS="${RUNNER_LABELS:-$DEFAULT_LABELS}"
 LATEST_VERSION="$(get_latest_version)"
 read -rp "$(echo -e "${BOLD}[5/5]${RESET} 安装版本 [默认: ${LATEST_VERSION}]: ")" RUNNER_VERSION
 RUNNER_VERSION="${RUNNER_VERSION:-$LATEST_VERSION}"
-RUNNER_VERSION="${RUNNER_VERSION#v}"   # 去掉前缀 v，后面会手动加
+RUNNER_VERSION="${RUNNER_VERSION#v}"
 
 # --------------------------------------------------------------------------- #
-# 确认信息
+# 确认摘要
 # --------------------------------------------------------------------------- #
 echo -e "\n${BOLD}─────────────────── 安装摘要 ───────────────────${RESET}"
 echo -e "  Gitea URL   : ${CYAN}${GITEA_URL}${RESET}"
+echo -e "  Token       : ${CYAN}${RUNNER_TOKEN}${RESET}"
 echo -e "  Runner 名称 : ${CYAN}${RUNNER_NAME}${RESET}"
 echo -e "  Labels      : ${CYAN}${RUNNER_LABELS}${RESET}"
 echo -e "  版本        : ${CYAN}v${RUNNER_VERSION}${RESET}"
@@ -137,7 +139,6 @@ esac
 # --------------------------------------------------------------------------- #
 step "下载 Gitea Runner v${RUNNER_VERSION} (${ARCH})"
 
-# v1.0.0+ 使用新名称 gitea-runner；v0.x 使用 act_runner
 if [[ "$(printf '%s\n' "1.0.0" "${RUNNER_VERSION}" | sort -V | head -1)" == "1.0.0" ]]; then
   DL_URL="https://gitea.com/gitea/runner/releases/download/v${RUNNER_VERSION}/gitea-runner-${RUNNER_VERSION}-linux-${ARCH}"
 else
@@ -145,20 +146,18 @@ else
 fi
 
 TMP_BIN="$(mktemp)"
-info "下载: ${DL_URL}"
+info "下载地址: ${DL_URL}"
 
 if ! curl -fsSL --retry 3 --retry-delay 2 -o "$TMP_BIN" "$DL_URL"; then
-  # 尝试备用 URL
   ALT_URL="https://dl.gitea.com/act_runner/${RUNNER_VERSION}/act_runner-${RUNNER_VERSION}-linux-${ARCH}"
-  warn "主 URL 下载失败，尝试备用: ${ALT_URL}"
+  warn "主下载地址失败，尝试备用地址: ${ALT_URL}"
   curl -fsSL --retry 3 --retry-delay 2 -o "$TMP_BIN" "$ALT_URL" \
-    || error "下载失败，请检查版本号或网络连接。"
+    || error "下载失败，请检查版本号（v${RUNNER_VERSION}）或网络连接是否正常。"
 fi
 
 install -m 0755 "$TMP_BIN" /usr/local/bin/gitea-runner
 rm -f "$TMP_BIN"
 
-# 验证
 ACTUAL_VER="$(/usr/local/bin/gitea-runner --version 2>&1 | head -1 || true)"
 success "二进制安装完成: ${ACTUAL_VER}"
 
@@ -198,13 +197,11 @@ step "生成 Runner 配置文件"
 CONFIG_FILE="/etc/gitea-runner/config.yaml"
 
 if [[ -f "$CONFIG_FILE" ]]; then
-  warn "配置文件已存在，跳过自动生成（保留现有配置）。"
+  warn "配置文件已存在，跳过生成（保留现有配置）: ${CONFIG_FILE}"
 else
-  /usr/local/bin/gitea-runner generate-config > "$CONFIG_FILE" 2>/dev/null || \
-  /usr/local/bin/gitea-runner --config "$CONFIG_FILE" generate-config 2>/dev/null || true
+  /usr/local/bin/gitea-runner generate-config > "$CONFIG_FILE" 2>/dev/null || true
 
   if [[ ! -s "$CONFIG_FILE" ]]; then
-    # 如果 generate-config 不可用，写入最小配置
     cat > "$CONFIG_FILE" <<'YAML'
 log:
   level: info
@@ -231,48 +228,42 @@ YAML
 fi
 
 # --------------------------------------------------------------------------- #
-# 注册 Runner（非交互模式）
+# 注册 Runner
 # --------------------------------------------------------------------------- #
 step "注册 Runner 到 Gitea 实例"
 
 RUNNER_FILE="/var/lib/gitea-runner/.runner"
 
 if [[ -f "$RUNNER_FILE" ]]; then
-  warn ".runner 注册文件已存在，跳过注册（如需重新注册请删除 ${RUNNER_FILE}）。"
+  warn ".runner 注册文件已存在，跳过注册。如需重新注册请先删除: ${RUNNER_FILE}"
 else
   info "正在向 ${GITEA_URL} 注册 Runner..."
 
-  # 关键1: 必须先 cd 到 gitea-runner 有写权限的工作目录，
-  # register 命令会把 .runner 保存到「当前目录」，而非二进制所在目录。
-  # 关键2: sudo 默认开启 env_reset，会清除调用者的所有环境变量。
-  # 用 `sudo -u user env KEY=val bash -c '单引号'` 可绕过该限制：
-  # sudo 以目标用户身份运行 env，env 再注入变量后启动 bash。
-  # 变量名加 _ 前缀避免与子进程内可能的同名变量冲突。
-  sudo -u gitea-runner env \
-    _GITEA_URL="$GITEA_URL" \
-    _RUNNER_TOKEN="$RUNNER_TOKEN" \
-    _RUNNER_NAME="$RUNNER_NAME" \
-    _RUNNER_LABELS="$RUNNER_LABELS" \
-    _CONFIG_FILE="$CONFIG_FILE" \
-    bash -c '
-      cd /var/lib/gitea-runner &&
-      /usr/local/bin/gitea-runner register \
-        --no-interactive \
-        --instance  "$_GITEA_URL" \
-        --token     "$_RUNNER_TOKEN" \
-        --name      "$_RUNNER_NAME" \
-        --labels    "$_RUNNER_LABELS" \
-        --config    "$_CONFIG_FILE"
-    ' 2>&1 | tee /tmp/gitea-runner-register.log
+  # 以 root 身份切换到工作目录执行注册。
+  # .runner 会写入当前目录（/var/lib/gitea-runner），注册完成后再 chown 给专用用户。
+  # 避免使用 sudo -u 切换用户执行，因为 sudo 的 env_reset 策略会清空所有传入变量。
+  (
+    cd /var/lib/gitea-runner
+    /usr/local/bin/gitea-runner register \
+      --no-interactive \
+      --instance "$GITEA_URL" \
+      --token    "$RUNNER_TOKEN" \
+      --name     "$RUNNER_NAME" \
+      --labels   "$RUNNER_LABELS" \
+      --config   "$CONFIG_FILE"
+  ) 2>&1 | tee /tmp/gitea-runner-register.log
 
   if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
-    error "注册失败，请检查 Token 和 Gitea URL 是否正确。\n日志: /tmp/gitea-runner-register.log"
+    error "注册失败，请检查以下内容：\n  - Gitea URL 是否正确: ${GITEA_URL}\n  - Token 是否有效（未过期、未被重置）\n  - 网络是否可以访问 Gitea 实例\n  详细日志: /tmp/gitea-runner-register.log"
   fi
 
-  # .runner 由 gitea-runner 用户写入，权限已正确，确认即可
-  [[ -f "$RUNNER_FILE" ]] || error "注册看似成功但 .runner 文件未生成，请查看日志: /tmp/gitea-runner-register.log"
+  if [[ ! -f "$RUNNER_FILE" ]]; then
+    error "注册命令执行成功但未生成 .runner 文件，请查看日志: /tmp/gitea-runner-register.log"
+  fi
 
-  success "Runner 注册成功。"
+  chown gitea-runner:gitea-runner "$RUNNER_FILE"
+  chmod 600 "$RUNNER_FILE"
+  success "Runner 注册成功，凭据文件: ${RUNNER_FILE}"
 fi
 
 # --------------------------------------------------------------------------- #
@@ -293,28 +284,23 @@ User=gitea-runner
 Group=gitea-runner
 WorkingDirectory=/var/lib/gitea-runner
 
-# 主进程
 ExecStart=/usr/local/bin/gitea-runner daemon --config /etc/gitea-runner/config.yaml
 ExecReload=/bin/kill -s HUP \$MAINPID
 
-# 自动重启策略
 Restart=always
 RestartSec=10s
 StartLimitInterval=120s
 StartLimitBurst=5
 
-# 日志（journald 统一收集，无需额外日志文件）
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=gitea-runner
 
-# 安全加固
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ReadWritePaths=/var/lib/gitea-runner /etc/gitea-runner /tmp
 
-# 环境变量
 Environment=HOME=/var/lib/gitea-runner
 
 [Install]
@@ -325,23 +311,23 @@ chmod 644 /etc/systemd/system/gitea-runner.service
 success "systemd 服务文件创建完成: /etc/systemd/system/gitea-runner.service"
 
 # --------------------------------------------------------------------------- #
-# 配置 journald 日志持久化（可选）
+# 配置 journald 日志持久化
 # --------------------------------------------------------------------------- #
-step "确保 journald 日志持久化"
+step "配置 journald 日志持久化"
 
-JOURNALD_CONF="/etc/systemd/journald.conf.d/99-gitea-runner.conf"
 mkdir -p /etc/systemd/journald.conf.d
-cat > "$JOURNALD_CONF" <<'EOF'
+cat > /etc/systemd/journald.conf.d/99-gitea-runner.conf <<'EOF'
 [Journal]
 Storage=persistent
 SystemMaxUse=200M
 SystemKeepFree=100M
 MaxRetentionSec=30day
 EOF
-success "日志持久化配置完成（保留 30 天，最大 200MB）。"
+
+success "日志持久化配置完成（保留 30 天，上限 200MB）。"
 
 # --------------------------------------------------------------------------- #
-# 启用并启动服务
+# 启动服务
 # --------------------------------------------------------------------------- #
 step "启用并启动 gitea-runner 服务"
 
@@ -349,56 +335,51 @@ systemctl daemon-reload
 systemctl enable gitea-runner.service
 systemctl restart gitea-runner.service
 
-# 等待服务稳定
 sleep 3
 if systemctl is-active --quiet gitea-runner.service; then
-  success "gitea-runner 服务运行正常！"
+  success "gitea-runner 服务运行正常。"
 else
-  warn "服务启动后状态异常，请查看日志: journalctl -u gitea-runner -n 50"
+  warn "服务启动后状态异常，请执行以下命令查看日志:\n  journalctl -u gitea-runner -n 50"
 fi
 
 # --------------------------------------------------------------------------- #
-# 完成输出
+# 完成说明
 # --------------------------------------------------------------------------- #
 echo -e "\n${BOLD}${GREEN}"
 echo "  ╔═══════════════════════════════════════════════════════╗"
-echo "  ║          Gitea Runner 安装完成！                      ║"
+echo "  ║         Gitea Runner 安装完成                         ║"
 echo "  ╚═══════════════════════════════════════════════════════╝"
 echo -e "${RESET}"
 
-echo -e "${BOLD}── 服务管理命令 ─────────────────────────────────────────${RESET}"
-echo -e "  启动服务   ${CYAN}systemctl start  gitea-runner${RESET}"
-echo -e "  停止服务   ${CYAN}systemctl stop   gitea-runner${RESET}"
-echo -e "  重启服务   ${CYAN}systemctl restart gitea-runner${RESET}"
-echo -e "  查看状态   ${CYAN}systemctl status  gitea-runner${RESET}"
-echo -e "  开机自启   ${CYAN}systemctl enable  gitea-runner${RESET}  ${GREEN}(已启用)${RESET}"
-echo -e "  禁用自启   ${CYAN}systemctl disable gitea-runner${RESET}"
+echo -e "${BOLD}── 服务管理 ─────────────────────────────────────────────${RESET}"
+echo -e "  启动   ${CYAN}systemctl start   gitea-runner${RESET}"
+echo -e "  停止   ${CYAN}systemctl stop    gitea-runner${RESET}"
+echo -e "  重启   ${CYAN}systemctl restart gitea-runner${RESET}"
+echo -e "  状态   ${CYAN}systemctl status  gitea-runner${RESET}"
+echo -e "  自启   ${CYAN}systemctl enable  gitea-runner${RESET}  ${GREEN}(已启用)${RESET}"
 
-echo -e "\n${BOLD}── 日志查看命令 ─────────────────────────────────────────${RESET}"
+echo -e "\n${BOLD}── 查看日志 ─────────────────────────────────────────────${RESET}"
 echo -e "  实时跟踪   ${CYAN}journalctl -u gitea-runner -f${RESET}"
-echo -e "  最近 100 行${CYAN}journalctl -u gitea-runner -n 100${RESET}"
+echo -e "  最近100行  ${CYAN}journalctl -u gitea-runner -n 100${RESET}"
 echo -e "  今日日志   ${CYAN}journalctl -u gitea-runner --since today${RESET}"
-echo -e "  时间范围   ${CYAN}journalctl -u gitea-runner --since '2025-01-01' --until '2025-12-31'${RESET}"
 echo -e "  只看错误   ${CYAN}journalctl -u gitea-runner -p err${RESET}"
 
-echo -e "\n${BOLD}── 配置文件 ─────────────────────────────────────────────${RESET}"
+echo -e "\n${BOLD}── 重要文件 ─────────────────────────────────────────────${RESET}"
 echo -e "  配置文件   ${CYAN}/etc/gitea-runner/config.yaml${RESET}"
-echo -e "  注册文件   ${CYAN}/var/lib/gitea-runner/.runner${RESET}"
+echo -e "  注册凭据   ${CYAN}/var/lib/gitea-runner/.runner${RESET}"
 echo -e "  服务文件   ${CYAN}/etc/systemd/system/gitea-runner.service${RESET}"
 
-echo -e "\n${BOLD}── 重新注册 Runner ──────────────────────────────────────${RESET}"
-echo -e "  ${YELLOW}如需重新注册，执行以下命令后重新运行本脚本:${RESET}"
-echo -e "  ${CYAN}rm /var/lib/gitea-runner/.runner${RESET}"
+echo -e "\n${BOLD}── 重新注册 ─────────────────────────────────────────────${RESET}"
+echo -e "  ${YELLOW}删除凭据文件后重新运行本脚本即可:${RESET}"
+echo -e "  ${CYAN}rm /var/lib/gitea-runner/.runner && bash install-gitea-runner.sh${RESET}"
 
-echo -e "\n${BOLD}── 在 Gitea 管理面板验证 ────────────────────────────────${RESET}"
+echo -e "\n${BOLD}── 验证 Runner 状态 ─────────────────────────────────────${RESET}"
 echo -e "  访问: ${CYAN}${GITEA_URL}/-/admin/actions/runners${RESET}"
 echo -e "  Runner ${GREEN}${RUNNER_NAME}${RESET} 应显示为 ${GREEN}Online${RESET} 状态。"
 
-echo -e "\n${BOLD}── 卸载方法 ─────────────────────────────────────────────${RESET}"
+echo -e "\n${BOLD}── 卸载 ─────────────────────────────────────────────────${RESET}"
 echo -e "  ${CYAN}systemctl stop gitea-runner && systemctl disable gitea-runner${RESET}"
-echo -e "  ${CYAN}rm -f /etc/systemd/system/gitea-runner.service${RESET}"
-echo -e "  ${CYAN}rm -f /usr/local/bin/gitea-runner${RESET}"
+echo -e "  ${CYAN}rm -f /etc/systemd/system/gitea-runner.service /usr/local/bin/gitea-runner${RESET}"
 echo -e "  ${CYAN}rm -rf /var/lib/gitea-runner /etc/gitea-runner${RESET}"
-echo -e "  ${CYAN}userdel gitea-runner${RESET}"
-echo -e "  ${CYAN}systemctl daemon-reload${RESET}"
+echo -e "  ${CYAN}userdel gitea-runner && systemctl daemon-reload${RESET}"
 echo ""
