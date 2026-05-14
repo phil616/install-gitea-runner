@@ -242,25 +242,28 @@ if [[ -f "$RUNNER_FILE" ]]; then
 else
   info "正在向 ${GITEA_URL} 注册 Runner..."
 
-  # 关键：必须先 cd 到 gitea-runner 有写权限的工作目录，
+  # 关键1: 必须先 cd 到 gitea-runner 有写权限的工作目录，
   # register 命令会把 .runner 保存到「当前目录」，而非二进制所在目录。
-  # sudo -u 只切换用户身份，不切换 CWD，因此要在 bash -c 内先 cd。
-  # 变量通过环境变量传入，避免 URL/Token 含特殊字符时破坏 bash -c 字符串。
-  GITEA_URL="$GITEA_URL" \
-  RUNNER_TOKEN="$RUNNER_TOKEN" \
-  RUNNER_NAME="$RUNNER_NAME" \
-  RUNNER_LABELS="$RUNNER_LABELS" \
-  CONFIG_FILE="$CONFIG_FILE" \
-  sudo -u gitea-runner bash -c '
-    cd /var/lib/gitea-runner &&
-    /usr/local/bin/gitea-runner register \
-      --no-interactive \
-      --instance  "$GITEA_URL" \
-      --token     "$RUNNER_TOKEN" \
-      --name      "$RUNNER_NAME" \
-      --labels    "$RUNNER_LABELS" \
-      --config    "$CONFIG_FILE"
-  ' 2>&1 | tee /tmp/gitea-runner-register.log
+  # 关键2: sudo 默认开启 env_reset，会清除调用者的所有环境变量。
+  # 用 `sudo -u user env KEY=val bash -c '单引号'` 可绕过该限制：
+  # sudo 以目标用户身份运行 env，env 再注入变量后启动 bash。
+  # 变量名加 _ 前缀避免与子进程内可能的同名变量冲突。
+  sudo -u gitea-runner env \
+    _GITEA_URL="$GITEA_URL" \
+    _RUNNER_TOKEN="$RUNNER_TOKEN" \
+    _RUNNER_NAME="$RUNNER_NAME" \
+    _RUNNER_LABELS="$RUNNER_LABELS" \
+    _CONFIG_FILE="$CONFIG_FILE" \
+    bash -c '
+      cd /var/lib/gitea-runner &&
+      /usr/local/bin/gitea-runner register \
+        --no-interactive \
+        --instance  "$_GITEA_URL" \
+        --token     "$_RUNNER_TOKEN" \
+        --name      "$_RUNNER_NAME" \
+        --labels    "$_RUNNER_LABELS" \
+        --config    "$_CONFIG_FILE"
+    ' 2>&1 | tee /tmp/gitea-runner-register.log
 
   if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
     error "注册失败，请检查 Token 和 Gitea URL 是否正确。\n日志: /tmp/gitea-runner-register.log"
